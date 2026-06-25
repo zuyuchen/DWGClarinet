@@ -1,9 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<JUCERPROJECT id="oJNhH1" name="NewProject" projectType="audioplug" useAppConfig="0"
-              addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1">
-  <MAINGROUP id="evD9CL" name="NewProject">
+<JUCERPROJECT id="oJNhH1" name="DWGClarinet" projectType="audioplug" useAppConfig="0"
+              addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1" pluginCharacteristicsValue="pluginIsSynth,pluginWantsMidiIn"
+              pluginFormats="buildAU,buildVST3" pluginVST3Category="Instrument">
+  <MAINGROUP id="evD9CL" name="DWGClarinet">
     <GROUP id="{1C156630-6684-E211-1EDD-EF28EBD85088}" name="Source">
+      <FILE id="sEjP2l" name="DelayLine.h" compile="0" resource="0" file="Source/DelayLine.h"/>
+      <FILE id="hPbRXp" name="DWGClarinet.cpp" compile="1" resource="0" file="Source/DWGClarinet.cpp"/>
+      <FILE id="IIoKWX" name="DWGClarinet.h" compile="0" resource="0" file="Source/DWGClarinet.h"/>
+      <FILE id="C9qRgT" name="FracDelay.h" compile="0" resource="0" file="Source/FracDelay.h"/>
       <FILE id="yAJDqC" name="PluginProcessor.cpp" compile="1" resource="0"
             file="Source/PluginProcessor.cpp"/>
       <FILE id="tIaep1" name="PluginProcessor.h" compile="0" resource="0"
@@ -34,8 +39,8 @@
   <EXPORTFORMATS>
     <XCODE_MAC targetFolder="Builds/MacOSX">
       <CONFIGURATIONS>
-        <CONFIGURATION isDebug="1" name="Debug" targetName="NewProject"/>
-        <CONFIGURATION isDebug="0" name="Release" targetName="NewProject"/>
+        <CONFIGURATION isDebug="1" name="Debug" targetName="DWGClarinet"/>
+        <CONFIGURATION isDebug="0" name="Release" targetName="DWGClarinet"/>
       </CONFIGURATIONS>
       <MODULEPATHS>
         <MODULEPATH id="juce_audio_basics" path="../../../modules"/>

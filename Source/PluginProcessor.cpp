@@ -10,7 +10,7 @@
 #include "PluginEditor.h"
 
 //==============================================================================
-NewProjectAudioProcessor::NewProjectAudioProcessor()
+DWGClarinetAudioProcessor::DWGClarinetAudioProcessor()
 #ifndef JucePlugin_PreferredChannelConfigurations
      : AudioProcessor (BusesProperties()
                      #if ! JucePlugin_IsMidiEffect
@@ -22,19 +22,29 @@ NewProjectAudioProcessor::NewProjectAudioProcessor()
                        )
 #endif
 {
+    // Stage 1–2 parameters — plain AudioParameterFloat for now (no APVTS).
+    // Ranges chosen from the validated Stage 1–2 testing:
+    //   offset ~0.6–0.9, slope ~ -0.1 to -1.0 keep the reed in/near its
+    //   working region (see ReedTable.h header comment on the [-1,+1] clamp
+    //   and why saturation at +1 is what drives oscillation).
+    {
+        addParameter (reedOffsetParam  = new juce::AudioParameterFloat (juce::ParameterID ("reedOffset", 1),  "Reed Offset",  0.3f, 0.95f, 0.7f));
+        addParameter (reedSlopeParam   = new juce::AudioParameterFloat (juce::ParameterID ("reedSlope", 1),   "Reed Slope",  -1.5f, -0.05f, -0.3f));
+        addParameter (bellReflectParam = new juce::AudioParameterFloat (juce::ParameterID ("bellReflect", 1), "Bell Reflection", -0.999f, -0.5f, -0.95f));
+    }
 }
 
-NewProjectAudioProcessor::~NewProjectAudioProcessor()
+DWGClarinetAudioProcessor::~DWGClarinetAudioProcessor()
 {
 }
 
 //==============================================================================
-const juce::String NewProjectAudioProcessor::getName() const
+const juce::String DWGClarinetAudioProcessor::getName() const
 {
     return JucePlugin_Name;
 }
 
-bool NewProjectAudioProcessor::acceptsMidi() const
+bool DWGClarinetAudioProcessor::acceptsMidi() const
 {
    #if JucePlugin_WantsMidiInput
     return true;
@@ -43,7 +53,7 @@ bool NewProjectAudioProcessor::acceptsMidi() const
    #endif
 }
 
-bool NewProjectAudioProcessor::producesMidi() const
+bool DWGClarinetAudioProcessor::producesMidi() const
 {
    #if JucePlugin_ProducesMidiOutput
     return true;
@@ -52,7 +62,7 @@ bool NewProjectAudioProcessor::producesMidi() const
    #endif
 }
 
-bool NewProjectAudioProcessor::isMidiEffect() const
+bool DWGClarinetAudioProcessor::isMidiEffect() const
 {
    #if JucePlugin_IsMidiEffect
     return true;
@@ -61,50 +71,59 @@ bool NewProjectAudioProcessor::isMidiEffect() const
    #endif
 }
 
-double NewProjectAudioProcessor::getTailLengthSeconds() const
+double DWGClarinetAudioProcessor::getTailLengthSeconds() const
 {
     return 0.0;
 }
 
-int NewProjectAudioProcessor::getNumPrograms()
+int DWGClarinetAudioProcessor::getNumPrograms()
 {
     return 1;   // NB: some hosts don't cope very well if you tell them there are 0 programs,
                 // so this should be at least 1, even if you're not really implementing programs.
 }
 
-int NewProjectAudioProcessor::getCurrentProgram()
+int DWGClarinetAudioProcessor::getCurrentProgram()
 {
     return 0;
 }
 
-void NewProjectAudioProcessor::setCurrentProgram (int index)
+void DWGClarinetAudioProcessor::setCurrentProgram (int index)
 {
 }
 
-const juce::String NewProjectAudioProcessor::getProgramName (int index)
+const juce::String DWGClarinetAudioProcessor::getProgramName (int index)
 {
     return {};
 }
 
-void NewProjectAudioProcessor::changeProgramName (int index, const juce::String& newName)
+void DWGClarinetAudioProcessor::changeProgramName (int index, const juce::String& newName)
 {
 }
 
 //==============================================================================
-void NewProjectAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+void DWGClarinetAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    // Use this method as the place to do any pre-playback
-    // initialisation that you need..
+    juce::ignoreUnused (samplesPerBlock);
+
+    // 50 Hz floor covers clarinet's full written range (D3 ≈ 147 Hz) with
+    // margin for pitch-bend experiments later; matches the lowestFreq used
+    // during Stage 1–2 validation.
+    clarinet.prepare (sampleRate, 50.0f);
+    clarinet.setReedParameters (reedOffsetParam->get(), reedSlopeParam->get());
+    clarinet.setBellReflection (bellReflectParam->get());
+
+    heldNotes.clear();
+    currentMidiNote = -1;
 }
 
-void NewProjectAudioProcessor::releaseResources()
+void DWGClarinetAudioProcessor::releaseResources()
 {
     // When playback stops, you can use this as an opportunity to free up any
     // spare memory, etc.
 }
 
 #ifndef JucePlugin_PreferredChannelConfigurations
-bool NewProjectAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
+bool DWGClarinetAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
   #if JucePlugin_IsMidiEffect
     juce::ignoreUnused (layouts);
@@ -129,7 +148,49 @@ bool NewProjectAudioProcessor::isBusesLayoutSupported (const BusesLayout& layout
 }
 #endif
 
-void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
+//==============================================================================
+//  MIDI handling — monophonic note stack.
+//  Real clarinet: one reed. A new key while one is held retunes the SAME
+//  voice (no second oscillator spawned). Releasing falls back to the next
+//  held note if any, otherwise the reed stops (noteOff envelope release).
+//==============================================================================
+void DWGClarinetAudioProcessor::handleNoteOn (int midiNote, float velocity)
+{
+    // Remove if already in the stack (defensive against duplicate note-ons),
+    // then push to the back — back of stack = most recently pressed = the
+    // note currently sounding.
+    heldNotes.erase (std::remove (heldNotes.begin(), heldNotes.end(), midiNote), heldNotes.end());
+    heldNotes.push_back (midiNote);
+
+    currentMidiNote = midiNote;
+    clarinet.noteOn (midiNoteToFreq (midiNote), velocity);
+}
+
+void DWGClarinetAudioProcessor::handleNoteOff (int midiNote)
+{
+    heldNotes.erase (std::remove (heldNotes.begin(), heldNotes.end(), midiNote), heldNotes.end());
+
+    if (midiNote != currentMidiNote)
+        return; // releasing a note that wasn't the sounding one — no-op
+
+    if (! heldNotes.empty())
+    {
+        // Fall back to the most recently pressed still-held note, re-trigger
+        // its breath envelope at a moderate velocity (legato-style retune
+        // would skip the attack; re-triggering is simpler and matches how
+        // Stage 1–2's noteOn() is designed to be called).
+        int fallbackNote = heldNotes.back();
+        currentMidiNote = fallbackNote;
+        clarinet.noteOn (midiNoteToFreq (fallbackNote), 0.7f);
+    }
+    else
+    {
+        currentMidiNote = -1;
+        clarinet.noteOff (0.5f);
+    }
+}
+
+void DWGClarinetAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
     juce::ScopedNoDenormals noDenormals;
     auto totalNumInputChannels  = getTotalNumInputChannels();
@@ -138,54 +199,89 @@ void NewProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     // In case we have more outputs than inputs, this code clears any output
     // channels that didn't contain input data, (because these aren't
     // guaranteed to be empty - they may contain garbage).
-    // This is here to avoid people getting screaming feedback
-    // when they first compile a plugin, but obviously you don't need to keep
-    // this code if your algorithm always overwrites all the output channels.
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
-    // This is the place where you'd normally do the guts of your plugin's
-    // audio processing...
-    // Make sure to reset the state if your inner loop is processing
-    // the samples and the outer loop is handling the channels.
-    // Alternatively, you can process the samples with the channels
-    // interleaved by keeping the same state.
-    for (int channel = 0; channel < totalNumInputChannels; ++channel)
-    {
-        auto* channelData = buffer.getWritePointer (channel);
+    // Live-update reed/bell parameters every block (cheap, no need to
+    // sample-smooth at Stage 1–2 — revisit if clicks appear when twiddling
+    // knobs during a sustained note).
+    clarinet.setReedParameters (reedOffsetParam->get(), reedSlopeParam->get());
+    clarinet.setBellReflection (bellReflectParam->get());
 
-        // ..do something to the data...
+    const int numSamples = buffer.getNumSamples();
+
+    // Walk MIDI events in timestamp order, rendering clarinet samples up to
+    // each event, then handling the event, so note changes land on the
+    // correct sample within the block.
+    int samplePos = 0;
+    for (const auto metadata : midiMessages)
+    {
+        const auto message = metadata.getMessage();
+        const int eventSample = metadata.samplePosition;
+
+        // Render up to this event
+        for (; samplePos < eventSample && samplePos < numSamples; ++samplePos)
+        {
+            float y = clarinet.process();
+            for (int ch = 0; ch < totalNumOutputChannels; ++ch)
+                buffer.setSample (ch, samplePos, y);
+        }
+
+        if (message.isNoteOn())
+            handleNoteOn (message.getNoteNumber(), message.getFloatVelocity());
+        else if (message.isNoteOff())
+            handleNoteOff (message.getNoteNumber());
+        else if (message.isAllNotesOff() || message.isAllSoundOff())
+        {
+            heldNotes.clear();
+            currentMidiNote = -1;
+            clarinet.noteOff (0.0f);
+        }
+    }
+
+    // Render the remainder of the block after the last MIDI event
+    for (; samplePos < numSamples; ++samplePos)
+    {
+        float y = clarinet.process();
+        for (int ch = 0; ch < totalNumOutputChannels; ++ch)
+            buffer.setSample (ch, samplePos, y);
     }
 }
 
 //==============================================================================
-bool NewProjectAudioProcessor::hasEditor() const
+bool DWGClarinetAudioProcessor::hasEditor() const
 {
     return true; // (change this to false if you choose to not supply an editor)
 }
 
-juce::AudioProcessorEditor* NewProjectAudioProcessor::createEditor()
+juce::AudioProcessorEditor* DWGClarinetAudioProcessor::createEditor()
 {
-    return new NewProjectAudioProcessorEditor (*this);
+    return new DWGClarinetAudioProcessorEditor (*this);
 }
 
 //==============================================================================
-void NewProjectAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
+void DWGClarinetAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    // You should use this method to store your parameters in the memory block.
-    // You could do that either as raw data, or use the XML or ValueTree classes
-    // as intermediaries to make it easy to save and load complex data.
+    juce::MemoryOutputStream stream (destData, true);
+    stream.writeFloat (reedOffsetParam->get());
+    stream.writeFloat (reedSlopeParam->get());
+    stream.writeFloat (bellReflectParam->get());
 }
 
-void NewProjectAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
+void DWGClarinetAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    // You should use this method to restore your parameters from this memory block,
-    // whose contents will have been created by the getStateInformation() call.
+    juce::MemoryInputStream stream (data, (size_t) sizeInBytes, false);
+    if (stream.getNumBytesRemaining() >= (int) (3 * sizeof (float)))
+    {
+        *reedOffsetParam  = stream.readFloat();
+        *reedSlopeParam   = stream.readFloat();
+        *bellReflectParam = stream.readFloat();
+    }
 }
 
 //==============================================================================
 // This creates new instances of the plugin..
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
-    return new NewProjectAudioProcessor();
+    return new DWGClarinetAudioProcessor();
 }

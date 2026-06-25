@@ -9,16 +9,21 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include "DWGClarinet.h"
 
 //==============================================================================
 /**
+    MIDI-driven monophonic clarinet synth, Stage 1–2 (linear ReedTable,
+    scalar bell reflection). One DWGClarinet voice; new note-on retunes and
+    re-triggers the breath envelope on the same instance (monophonic, like
+    a real single-reed instrument — you can't play two notes on one reed).
 */
-class NewProjectAudioProcessor  : public juce::AudioProcessor
+class DWGClarinetAudioProcessor  : public juce::AudioProcessor
 {
 public:
     //==============================================================================
-    NewProjectAudioProcessor();
-    ~NewProjectAudioProcessor() override;
+    DWGClarinetAudioProcessor();
+    ~DWGClarinetAudioProcessor() override;
 
     //==============================================================================
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
@@ -53,7 +58,35 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
+    //==============================================================================
+    // Exposed so the editor can wire up knobs without needing an APVTS yet
+    // (Stage 1–2 has few enough parameters that a full AudioProcessorValueTreeState
+    // is unnecessary overhead; revisit once Bernoulli/dynamic reed adds more params).
+    juce::AudioParameterFloat* reedOffsetParam  = nullptr;
+    juce::AudioParameterFloat* reedSlopeParam   = nullptr;
+    juce::AudioParameterFloat* bellReflectParam = nullptr;
+
 private:
     //==============================================================================
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NewProjectAudioProcessor)
+    DWGClarinet clarinet;
+
+    // ── Monophonic note tracking ─────────────────────────────────────────────
+    // Real-world clarinet: one reed, one note at a time. If a second key is
+    // pressed while the first is held, the new note re-triggers (retunes the
+    // existing voice) rather than spawning a second voice. Releasing the
+    // second note falls back to the first if it's still held (basic note
+    // stack), matching how monophonic synths conventionally behave.
+    std::vector<int> heldNotes;
+    int currentMidiNote = -1;
+
+    static float midiNoteToFreq (int midiNote)
+    {
+        return 440.0f * std::pow (2.0f, (midiNote - 69) / 12.0f);
+    }
+
+    void handleNoteOn  (int midiNote, float velocity);
+    void handleNoteOff (int midiNote);
+
+    //==============================================================================
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DWGClarinetAudioProcessor)
 };
